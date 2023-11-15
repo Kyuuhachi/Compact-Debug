@@ -2,6 +2,11 @@
 name = "compact-debug"
 version = "0.1.0"
 edition = "2021"
+description = "Monkey-patches Rust's fmt system to make pretty-printing more compact"
+authors = ["Kyuuhachi <caagr98@gmail.com>"]
+repository = "https://github.com/Kyuuhachi/Compact-Debug"
+license = "MIT OR Apache-2.0"
+categories = ["development-tools::debugging", "value-formatting"]
 
 [dependencies]
 region = "3.0.0"
