@@ -51,9 +51,9 @@
 //!     Const(0),
 //!     Op(Ne),
 //! ])), Address(30016)),
+//! ```
 //!
 //! This crate currently only supports x86_64 architecture.
-//! ```
 
 #[cfg(not(target_arch = "x86_64"))]
 compile_error!("only supported on x86_64");

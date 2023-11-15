@@ -54,8 +54,8 @@ Expr(Expr(Expr([
     Const(0),
     Op(Ne),
 ])), Address(30016)),
+```
 
 This crate currently only supports x86_64 architecture.
-```
 
 <!-- cargo-rdme end -->
