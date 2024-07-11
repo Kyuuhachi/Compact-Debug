@@ -1,6 +1,6 @@
 [package]
 name = "compact-debug"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Monkey-patches Rust's fmt system to make pretty-printing more compact"
 authors = ["Kyuuhachi <caagr98@gmail.com>"]

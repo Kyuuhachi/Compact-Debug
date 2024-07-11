@@ -55,11 +55,23 @@
 //!
 //! This crate currently only supports x86_64 architecture.
 
+use std::sync::OnceLock;
+
 #[cfg(not(target_arch = "x86_64"))]
 compile_error!("only supported on x86_64");
 
-const ORIGINAL: [u8; 2] = [0x75, 0x3E]; // jne 0x40
-const PATCHED: [u8; 2] = [0x66, 0x90]; // nop
+#[derive(Debug, Clone, Copy)]
+struct Position(usize, [u8; 2]);
+
+const POSITIONS: &[Position] = &[
+	Position(0x44, [0x75, 0x42]), // 2023-04-11, 2024-04-20, 2024-07-10, 1.79.0
+	Position(0x49, [0x75, 0x43]), // 2023-05-11
+	Position(0x46, [0x75, 0x3E]), // 2024-02-06, 1.77.2
+];
+
+const NOP: [u8; 2] = [0x66, 0x90];
+
+static WHICH: OnceLock<Position> = OnceLock::new();
 
 /// Enables or disables the patch.
 ///
@@ -73,19 +85,62 @@ const PATCHED: [u8; 2] = [0x66, 0x90]; // nop
 pub unsafe fn enable(on: bool) {
 	unsafe {
 		let function = std::fmt::DebugTuple::field as *const () as *const u8;
-		let ptr = function.offset(0x46) as *mut [u8; 2];
-		if !matches!(*ptr, ORIGINAL | PATCHED) {
-			panic!("DebugTuple::field is not as expected")
+		let pos = WHICH.get_or_init(|| find(function));
+		let ptr = function.add(pos.0) as *mut [u8; 2];
+		if *ptr != pos.1 && *ptr != NOP {
+			panic!("DebugTuple::field is not as expected (is {:02X?})", *ptr);
 		}
 		let _prot =
 			region::protect_with_handle(ptr, 2, region::Protection::READ_WRITE_EXECUTE).unwrap();
-		ptr.write(if on { PATCHED } else { ORIGINAL });
+		ptr.write(if on { NOP } else { pos.1 });
 	}
+}
+
+unsafe fn find(ptr: *const u8) -> Position {
+	for &pos in POSITIONS {
+		let ptr = ptr.add(pos.0) as *const [u8; 2];
+		if *ptr == pos.1 {
+			return pos;
+		}
+	}
+
+	#[cfg(test)]
+	{
+		// If we couldn't find the position, try to guess one (but only print it, don't actually use it)
+		#[derive(Debug, Clone, Copy)]
+		enum State {
+			Start,
+			Ret,
+		}
+		let mut state = State::Start;
+		for i in 0..128 {
+			match (state, *ptr.add(i)) {
+				(State::Start, 0xC3) => state = State::Ret,
+				(State::Ret, 0x75) => panic!(
+					"could not find position - might be Position({:#02X}, [{:#02X}, {:#02X}])",
+					i,
+					*ptr.add(i),
+					*ptr.add(i + 1)
+				),
+				_ => (),
+			}
+		}
+
+		for i in 0..128 {
+			print!("{:02X} ", *ptr);
+			if i % 32 == 31 {
+				println!();
+			}
+		}
+	}
+
+	panic!("could not find position");
 }
 
 #[test]
 fn test() {
 	#[derive(Debug)]
+	#[allow(dead_code)]
 	struct A(u32, u32);
 
 	#[allow(dead_code)]
