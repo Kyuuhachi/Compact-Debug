@@ -1,3 +1,4 @@
+#![feature(fmt_helpers_for_derive)]
 //! `{:#?}` formatting, and the `dbg!()` macro, sound nice on paper. But once you try using them...
 //!
 //! ```text
@@ -53,25 +54,18 @@
 //! ])), Address(30016)),
 //! ```
 //!
-//! This crate currently only supports x86_64 architecture.
+//! This crate currently only supports x86_64 architecture, and requires nightly.
 
 use std::sync::OnceLock;
 
 #[cfg(not(target_arch = "x86_64"))]
 compile_error!("only supported on x86_64");
 
-#[derive(Debug, Clone, Copy)]
-struct Position(usize, [u8; 2]);
+struct Pos(*const u8);
+unsafe impl Send for Pos {}
+unsafe impl Sync for Pos {}
+static MATCHES: OnceLock<Vec<Pos>> = OnceLock::new();
 
-const POSITIONS: &[Position] = &[
-	Position(0x44, [0x75, 0x42]), // 2023-04-11, 2024-04-20, 2024-07-10, 1.79.0
-	Position(0x49, [0x75, 0x43]), // 2023-05-11
-	Position(0x46, [0x75, 0x3E]), // 2024-02-06, 1.77.2
-];
-
-const NOP: [u8; 2] = [0x66, 0x90];
-
-static WHICH: OnceLock<Position> = OnceLock::new();
 
 /// Enables or disables the patch.
 ///
@@ -84,57 +78,56 @@ static WHICH: OnceLock<Position> = OnceLock::new();
 /// consequences if called in multi-threaded contexts.
 pub unsafe fn enable(on: bool) {
 	unsafe {
-		let function = std::fmt::DebugTuple::field as *const () as *const u8;
-		let pos = WHICH.get_or_init(|| find(function));
-		let ptr = function.add(pos.0) as *mut [u8; 2];
-		if *ptr != pos.1 && *ptr != NOP {
-			panic!("DebugTuple::field is not as expected (is {:02X?})", *ptr);
+		let matches = MATCHES.get_or_init(find_all);
+
+		for Pos(ptr) in matches {
+			let ptr = ptr.cast_mut();
+			let _prot = region::protect_with_handle(ptr, 1, region::Protection::READ_WRITE_EXECUTE)
+				.unwrap();
+			ptr.write(if on { 0 } else { 4 });
 		}
-		let _prot =
-			region::protect_with_handle(ptr, 2, region::Protection::READ_WRITE_EXECUTE).unwrap();
-		ptr.write(if on { NOP } else { pos.1 });
 	}
 }
 
-unsafe fn find(ptr: *const u8) -> Position {
-	for &pos in POSITIONS {
-		let ptr = ptr.add(pos.0) as *const [u8; 2];
-		if *ptr == pos.1 {
-			return pos;
+fn find_all() -> Vec<Pos> {
+	unsafe {
+		let mut out = Vec::new();
+		macro_rules! find {
+			($name:path) => {
+				do_find(&mut out, stringify!($name), $name as *const () as *const u8);
+			};
 		}
+		find!(std::fmt::DebugTuple::field);
+		find!(std::fmt::DebugTuple::finish);
+		find!(std::fmt::DebugTuple::finish_non_exhaustive);
+		find!(std::fmt::Formatter::debug_tuple_field1_finish);
+		find!(std::fmt::Formatter::debug_tuple_field2_finish);
+		find!(std::fmt::Formatter::debug_tuple_field3_finish);
+		find!(std::fmt::Formatter::debug_tuple_field4_finish);
+		find!(std::fmt::Formatter::debug_tuple_field5_finish);
+		find!(std::fmt::Formatter::debug_tuple_fields_finish);
+
+		// Check that all the field offsets are the same
+		assert!(out.iter().all(|x| x.0 == out[0].0), "field offsets differ");
+
+		out.into_iter().map(|x| Pos(x.1)).collect()
 	}
+}
 
-	#[cfg(test)]
-	{
-		// If we couldn't find the position, try to guess one (but only print it, don't actually use it)
-		#[derive(Debug, Clone, Copy)]
-		enum State {
-			Start,
-			Ret,
+// Find pattern f6 4x ?? 04, and record the value of the ?? and the position of the 04.
+// End when we find a C3 (ret) or CC (int3) on a position that ends with 0xF.
+unsafe fn do_find(out: &mut Vec<(u8, *const u8)>, name: &str, mut ptr: *const u8) {
+	let n = out.len();
+	loop {
+		if (ptr as usize & 0xF) == 0xF && (*ptr == 0xC3 || *ptr == 0xCC) {
+			break;
 		}
-		let mut state = State::Start;
-		for i in 0..128 {
-			match (state, *ptr.add(i)) {
-				(State::Start, 0xC3) => state = State::Ret,
-				(State::Ret, 0x75) => panic!(
-					"could not find position - might be Position({:#02X}, [{:#02X}, {:#02X}])",
-					i,
-					*ptr.add(i),
-					*ptr.add(i + 1)
-				),
-				_ => (),
-			}
+		if *ptr == 0xF6 && *ptr.add(1) & 0xF0 == 0x40 && *ptr.add(3) == 0x04 {
+			out.push((*ptr.add(2), ptr.add(3)));
 		}
-
-		for i in 0..128 {
-			print!("{:02X} ", *ptr);
-			if i % 32 == 31 {
-				println!();
-			}
-		}
+		ptr = ptr.add(1);
 	}
-
-	panic!("could not find position");
+	assert!(out.len() > n, "no matches found for {name}");
 }
 
 #[test]
