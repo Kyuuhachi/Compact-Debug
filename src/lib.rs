@@ -143,6 +143,17 @@ fn test() {
 		y: u32,
 	}
 
+	#[allow(dead_code)]
+	#[derive(Debug)]
+	enum Enum {
+		A,
+		B(u32),
+		C(u32, u32),
+		D(u32, u32, u32),
+		E(u32, u32, u32, u32),
+		F(u32, u32, u32, u32, u32),
+	}
+
 	let a = A(8, 32);
 	let b = B { x: 8, y: 32 };
 
@@ -157,6 +168,13 @@ fn test() {
 	assert_eq!(format!("{a:#?}"), "A(8, 32)");
 	assert_eq!(format!("{b:?}"), "B { x: 8, y: 32 }");
 	assert_eq!(format!("{b:#?}"), "B {\n    x: 8,\n    y: 32,\n}");
+
+	assert!(!format!("{:#?}", Enum::A).contains('\n'));
+	assert!(!format!("{:#?}", Enum::B(0)).contains('\n'));
+	assert!(!format!("{:#?}", Enum::C(0, 0)).contains('\n'));
+	assert!(!format!("{:#?}", Enum::D(0, 0, 0)).contains('\n'));
+	assert!(!format!("{:#?}", Enum::E(0, 0, 0, 0)).contains('\n'));
+	assert!(!format!("{:#?}", Enum::F(0, 0, 0, 0, 0)).contains('\n'));
 
 	unsafe { enable(false) };
 
