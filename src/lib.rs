@@ -84,7 +84,7 @@ pub unsafe fn enable(on: bool) {
 			let ptr = ptr.cast_mut();
 			let _prot = region::protect_with_handle(ptr, 1, region::Protection::READ_WRITE_EXECUTE)
 				.unwrap();
-			ptr.write(if on { 0 } else { 4 });
+			ptr.write(if on { 0 } else { 0x80 });
 		}
 	}
 }
@@ -122,7 +122,7 @@ unsafe fn do_find(out: &mut Vec<(u8, *const u8)>, name: &str, mut ptr: *const u8
 		if (ptr as usize & 0xF) == 0xF && (*ptr == 0xC3 || *ptr == 0xCC) {
 			break;
 		}
-		if *ptr == 0xF6 && *ptr.add(1) & 0xF0 == 0x40 && *ptr.add(3) == 0x04 {
+		if *ptr == 0xF6 && *ptr.add(1) & 0xF0 == 0x40 && *ptr.add(3) == 0x80 {
 			out.push((*ptr.add(2), ptr.add(3)));
 		}
 		ptr = ptr.add(1);
