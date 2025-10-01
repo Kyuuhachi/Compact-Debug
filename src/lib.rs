@@ -54,9 +54,11 @@
 //! ])), Address(30016)),
 //! ```
 //!
+//! In addition, it also patches slices of primitive types, `&str`, and `String` to print on a single line.
+//!
 //! This crate currently only supports x86_64 architecture, and requires nightly.
 
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock};
 
 #[cfg(not(target_arch = "x86_64"))]
 compile_error!("only supported on x86_64");
@@ -66,6 +68,32 @@ unsafe impl Send for Pos {}
 unsafe impl Sync for Pos {}
 static MATCHES: OnceLock<Vec<Pos>> = OnceLock::new();
 
+macro_rules! patch_slice {
+	($ty:ty, $on:expr, $check:literal) => { {
+		static DETOUR: LazyLock<retour::RawDetour> = LazyLock::new(|| unsafe {
+			type Hook = for<'a, 'b, 'c> fn(&'a [$ty], &'b mut std::fmt::Formatter<'c>) -> std::fmt::Result;
+			#[cfg($check)]
+			#[expect(unused)]
+			static ORIG_FUNC: Hook = <[$ty] as std::fmt::Debug>::fmt;
+			static HOOK: Hook = |elf, f| {
+				write!(f, "[")?;
+				for (i, v) in elf.iter().enumerate() {
+					if i != 0 {
+						write!(f, ", ")?;
+					}
+					std::fmt::Debug::fmt(v, f)?;
+				}
+				write!(f, "]")
+			};
+			retour::RawDetour::new(<[$ty] as std::fmt::Debug>::fmt as *const (), HOOK as *const ()).unwrap()
+		});
+		if $on {
+			DETOUR.enable().unwrap();
+		} else {
+			DETOUR.disable().unwrap();
+		}
+	} }
+}
 
 /// Enables or disables the patch.
 ///
@@ -86,6 +114,25 @@ pub unsafe fn enable(on: bool) {
 				.unwrap();
 			ptr.write(if on { 0 } else { 0x80 });
 		}
+
+		patch_slice!(u8, on, true);
+		patch_slice!(u16, on, true);
+		patch_slice!(u32, on, true);
+		patch_slice!(u64, on, true);
+		patch_slice!(u128, on, true);
+		patch_slice!(usize, on, true);
+		patch_slice!(i8, on, true);
+		patch_slice!(i16, on, true);
+		patch_slice!(i32, on, true);
+		patch_slice!(i64, on, true);
+		patch_slice!(i128, on, true);
+		patch_slice!(isize, on, true);
+		patch_slice!(f32, on, true);
+		patch_slice!(f64, on, true);
+		patch_slice!(bool, on, true);
+		patch_slice!(char, on, true);
+		patch_slice!(&str, on, false); // can't get the lifetimes to work out, so skipping that check
+		patch_slice!(String, on, true);
 	}
 }
 
@@ -129,6 +176,8 @@ unsafe fn do_find(out: &mut Vec<(u8, *const u8)>, name: &str, mut ptr: *const u8
 	}
 	assert!(out.len() > n, "no matches found for {name}");
 }
+
+// NOTE: there must only be one test, since enable() is thread-unsafe and global.
 
 #[test]
 fn test() {
@@ -182,4 +231,40 @@ fn test() {
 	assert_eq!(format!("{a:#?}"), "A(\n    8,\n    32,\n)");
 	assert_eq!(format!("{b:?}"), "B { x: 8, y: 32 }");
 	assert_eq!(format!("{b:#?}"), "B {\n    x: 8,\n    y: 32,\n}");
+
+	test_list([1u8, 2, 3, 4, 5], "[\n    1,\n    2,\n    3,\n    4,\n    5,\n]", "[1, 2, 3, 4, 5]");
+	test_list([123u16], "[\n    123,\n]", "[123]");
+	test_list([123u32, 456], "[\n    123,\n    456,\n]", "[123, 456]");
+	test_list([123u64, 456, 789], "[\n    123,\n    456,\n    789,\n]", "[123, 456, 789]");
+	test_list([123u128, 456, 789, 101112], "[\n    123,\n    456,\n    789,\n    101112,\n]", "[123, 456, 789, 101112]");
+	test_list([1i32, 2, 3, 4, 5], "[\n    1,\n    2,\n    3,\n    4,\n    5,\n]", "[1, 2, 3, 4, 5]");
+	test_list(["one", "two", "three", "four", "five"], "[\n    \"one\",\n    \"two\",\n    \"three\",\n    \"four\",\n    \"five\",\n]", "[\"one\", \"two\", \"three\", \"four\", \"five\"]");
+	test_list([(1, 2), (3, 4), (5, 6)], "[\n    (\n        1,\n        2,\n    ),\n    (\n        3,\n        4,\n    ),\n    (\n        5,\n        6,\n    ),\n]", "[\n    (1, 2),\n    (3, 4),\n    (5, 6),\n]");
+}
+
+#[cfg(test)]
+fn test_list<T: std::fmt::Debug + Clone, const N: usize>(value: [T; N], long: &str, short: &str) {
+	let array = value;
+	let array_ref = &array;
+	let slice_ref = &array as &[_];
+	let vec = array.to_vec();
+
+	assert_eq!(format!("{array:#?}"), long);
+	assert_eq!(format!("{array_ref:#?}"), long);
+	assert_eq!(format!("{slice_ref:#?}"), long);
+	assert_eq!(format!("{vec:#?}"), long);
+
+	unsafe { enable(true) };
+
+	assert_eq!(format!("{array:#?}"), short);
+	assert_eq!(format!("{array_ref:#?}"), short);
+	assert_eq!(format!("{slice_ref:#?}"), short);
+	assert_eq!(format!("{vec:#?}"), short);
+
+	unsafe { enable(false) };
+
+	assert_eq!(format!("{array:#?}"), long);
+	assert_eq!(format!("{array_ref:#?}"), long);
+	assert_eq!(format!("{slice_ref:#?}"), long);
+	assert_eq!(format!("{vec:#?}"), long);
 }
